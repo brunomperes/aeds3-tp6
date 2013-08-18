@@ -1,0 +1,437 @@
+%	Documentação do Trabalho Prático 0 de AEDSIII
+%	@Bruno Maciel Peres
+%
+%	* Você pode identificar erros de grafia através do seguinte comando linux:
+%		aspell --encoding="iso8859-1" -c -t=tex --lang="pt_BR" tp6.tex
+%	
+%	Tenha cuidado com problemas de codificação, você pode perder muito tempo com isso (ter que reescrever o texto por que os caracteres % acendutados não aparecem corretamento no pdf, por exemplo). Se você usa Vi/Vim, ele identifica a codificação sozinho, em editores do tipo % Kate/Kwrite você pode definir a codificação em Ferramentas/Codificação, escolha a opção Oeste Europeu (iso8859-1).
+%	Para compilar o texto utilize o comando make (foi criado um Makefile)
+%	Para maiores informações consulte referências sobre LaTeX
+
+\documentclass[12pt]{article}
+\usepackage{sbc-template}
+\usepackage{graphicx}
+\usepackage{epstopdf}
+\usepackage{amsmath}
+\usepackage{subfigure}
+\usepackage{times,amsmath,epsfig}
+\usepackage[pdftex]{hyperref}
+\usepackage{graphicx,url}
+ \makeatletter
+ \newif\if@restonecol
+ \makeatother
+ \let\algorithm\relax
+ \let\endalgorithm\relax
+\usepackage[lined,algonl,ruled]{algorithm2e}
+\usepackage{multirow}
+\usepackage[brazil]{babel}
+\usepackage[latin1]{inputenc}
+
+\sloppy
+
+\title{TRABALHO PRÁTICO 6: \\ Paralelismo}
+
+\author{Bruno Maciel Peres}
+
+\address{Departamento de Ciência da Computação -- Universidade Federal de Minas Gerais (UFMG)
+\email{brunomperes@dcc.ufmg.br}
+}
+
+%\newcommand{tp}{tp6} %define nome do tp
+
+\begin{document} 
+
+\maketitle
+
+\begin{resumo} 
+Este relatório descreve uma solução proposta para a paralelização de um algoritmo que solucione o casamento estável, ou SMP. Os principais objetivos deste trabalho são: exercitar questões ligadas a paralelização de algoritmos, análise da solução proposta e aprofundamento dos conhecimentos na biblioteca da linguagem C \textit{pthreads}.
+
+\end{resumo}
+
+\section{INTRODUÇÃO}
+
+Neste trabalho, descrevemos e implementamos um algoritmo paralelo para otimizar o problema de casamento estável entre dois grupos com uma lista de prioridades entre si, ou \textit{Stable Marriage Problem} em inglês. O SMP, como será referido a partir de então é um problema conhecido e foco de estudos em Ciência da Computação. 
+
+	O SMP consiste em encontrar \textit{matchings} estáveis para todos os elementos de dois grupos que possuem uma ordem de preferência sobre os elementos do outro grupo. Um \textit{matching} ocorre quando dois elementos de grupos distintos estão ligados por uma relação (casamento) e é considerado estável quando não há, dentre as opções de preferência de ao menos um dos casados, outra combinação onde o casado e outro da lista de preferência preferem estar casados entre si ao invés de estar seu parceiro atual.
+
+	Este algoritmo possui aplicabilidade para resolução de problemas de interesse entre dois grupos. Um exemplo é alocação de estudantes de medicina formandos que preferem determinados hospitais, listando-os em ordem e hospitais que preferem alguns estudantes de medicina, ordenados por suas notas ou pelas áreas mais deficientes do hospital, por exemplo.
+
+	A paralelização de um algoritmo visa reduzir o tempo de execução da sua versão sequencial, distribuindo entre cores, threads ou processadores a carga de processamento a ser realizada. A paralelização cria uma carga extra de processamento ou tempo, devido à necessidade de sincronização entre as threads, isso pode levar à ociosidade de uma thread enquanto a outra não termina seu processamento. Esse problema pode ser agravado pelo desbalanceamento de carga entre essas threads.
+
+	A paralelização do algoritmo partiu do algoritmo sequencial proposto por Gale-Shapley[5], o mesmo abordado na realização do Trabalho Prático 0. Mais informações sobre esse algoritmo podem ser obtidas nas referências no final deste documento e na seção \textbf{Solução Proposta}.
+
+
+	Dado que o problema já fora tratado em sua versão sequencial em outro Trabalho, este relatório focará na comparação das versões sequencial e paralela, mas principalmente na versão paralela, especialmente no que se refere a tempo de execução. Para avaliar a solução proposta utiliza-se as métricas de Speedup e Eficiência.
+
+\section{SOLUÇÃO PROPOSTA}
+\label{solucao_proposta}
+
+A solução sequencial proposta para o SMP é utilizar o algoritmo de Gale-Shapley operando sobre o Tipo Abstrato de Dado lista duplamente encadeada.
+
+O algoritmo se resume em tentar casar todos os homens seguindo suas ordens de preferências. Caso haja algum conflito (um homem deseja casar-se com uma mulher já casada), a lista de preferências dessa mulher é acessada e dentre os dois homens conflitantes, aquele que for de maior interesse para a mulher será casado com essa mulher. O estado de casado do homem rejeitado passa a ser NÃO casado. Na próxima iteração o homem rejeitado tentará ser casado novamente. Quando não houver mais homens solteiros, uma solução estável foi obtida.
+
+A versão paralela dessa solução utiliza o paradigma de programação paralela de Mestre/Escravo, onde uma thread principal atribui tarefas à threads escravas. Essas últimas, à medida que terminam a execução, entregam o resultado à thread mestre.
+
+A thread mestre foi modelada para atribuir a tarefa de casar um homem solteiro à uma thread escrava. A thread escrava deve, por sua vez, percorrer a lista de preferências desse homem, tentando casá-lo com mulheres de sua preferência. Caso uma mulher ou um homem que precise ser acessado por uma thread esteja sendo utilizado por outra thread, a primeira deve aguardar através de \textit{busy-waiting}, implementada através da função \textit{mutex\_lock()} na biblioteca \textit{pthreads}.
+
+A complexidade de tempo do algoritmo paralelizado é $O((n/p)³)$, onde $p$ é a quantidade de threads. É importante considerar a Lei de Amdahl e que à medida que a quantidade de threads aumenta, há maior tempo ocioso entre as threads e há mais operações de sincronização, o que pode levar à um aumento no tempo de execução final para programas com um número muito alto de threads.
+
+\subsection{Casamento}
+
+A função de casamento realiza o casamento de um homem baseado na sua lista de preferências. Em caso de rejeição de uma mulher já casada, essa opção de mulher é removida da lista de preferências para evitar recálculo caso o programa tenha de casar esse homem novamente.
+
+A complexidade assintótica do pior caso dessa função é $O(n²)$, na situação em que deverá percorrer toda a lista de preferências e ser rejeitado por todas as mulheres, exceto a última. O cálculo da função de desempate é $O(n)$, pois percorre a lista de preferência da mulher.
+
+No melhor caso a mulher está solteira, executando a função em $O(1)$.
+
+
+\begin{algorithm}[h!]
+\begin{footnotesize}
+	
+	novo nó cursor = primeira opção do homem\;
+	\While{homem $i$ está casado}{
+		\eIf{mulher $i$ na lista de preferência do homem está casada}{
+		  melhor opção = mulher desempata por sua preferência (maridoatual, pretendente)\;
+		  \eIf{melhor opção == pretendente}{
+		    descasa(maridoatual, mulher)\;
+		    casa com o pretendente\;
+		   }
+		   {
+		     cursor = próximo na lista do homem\;
+		      remove mulher $i$ da lista do pretendente\;
+		   }
+		}{
+		  casa o homem corrente com a mulher na lista\;
+		  quantidade homens solteiros - -\;
+		}
+	}
+
+\caption{Casa homem(id $i$ do homem pretendente)}%
+\end{footnotesize}
+\end{algorithm}
+
+% \pagebreak
+
+\subsection{Versão Sequencial}
+
+Na versão sequencial da solução, um loop casa todos os homens enquanto houverem homens solteiros. A complexidade do pior caso da versão sequencial é $O(n³)$, pois deve executar $a \times n$ vezes a função \textit{casa\_homem()}, de complexidade quadrática.
+
+\begin{algorithm}[H]
+\begin{footnotesize}
+    i = 1\;
+    \While{quantidade de homens solteiros $>$ 0} {
+      \If($i > N$){ i = 1}\;
+      \If{homem $i$ não está casado} {
+	  casa\_homem ($i$)\;
+      }
+      i++\;
+    }
+
+\caption{men\_purpose\_algorithm-sequencial()}%
+\end{footnotesize}
+\end{algorithm}
+
+\subsection{Versão Paralela}
+
+A abordagem da versão paralela buscou distribuir a função de casar homem para $p-1$ threads, uma vez que uma das threads executa a função principal. Apesar das threads obterem acesso exclusivo a algumas listas de preferências de tempos em tempos, à medida em que o valor de $n$ aumenta em uma distribuição aleatória, há menor probabilidade de haver corrida para acesso aos dados (\textit{data race}).
+
+\begin{algorithm}[H]
+\begin{footnotesize}
+    t = 0 \textit{índice das threads}\; 
+    i = 1\;
+    \While{quantidade de homens solteiros $>$ 0} {
+    \If{$i > n$}{ i = 1}
+      \If{homem $i$ não está casado} {
+	  nova\_thread(casa\_homem ($i$))\;
+	  t++\;
+      }
+      \If{t $>$ (número máximo de threads - 1)}{
+	join em todas as threads\;
+	t=0\;
+      }
+      i++\;
+    }
+    join em todas as threads\;
+    
+    libera memória alocada dinamicamente\;
+    
+
+\caption{men\_purpose\_algorithm-paralelo()}%
+\end{footnotesize}
+\end{algorithm}
+
+\section{MODELAGEM}
+\label{modelagem}
+
+\subsection{Estruturas de dados}
+
+O problema foi modelado utilizando dois vetores de listas duplamente encadeadas. Cada lista armazena a lista de preferências de cada indivíduo e cada vetor representa um grupo de entidades, homens ou mulheres.
+
+A complexidade de espaço para armazenamento das informações de entrada é $O(2\times n²)$, onde $n$ é a quantidade de indivíduos em um dos grupos (já que ambos tem a mesma quantidade de elementos). Assintoticamente, a complexidade de espaço final é $O(n²)$.
+
+Cada thread armazena somente variáveis locais para controle de iterações ou algumas variáveis inerentes à execução da função, logo foram consideradas como overhead.
+
+\subsubsection{Estruturas Globais}
+Para garantir o acesso das threads aos dados necessários para processamento, os dados são armazenados em uma estrutura declarada globalmente. O conteúdo dessa estrutura é descrito abaixo:
+\begin{algorithm}
+\begin{footnotesize}
+    Quantidade de homens solteiros\;
+    Número de Threads\;
+    Vetor de listas Homem\;
+    Vetor de listas Mulher\;
+	
+\caption{Estrutura Global}%
+\end{footnotesize}
+\end{algorithm}
+
+\subsubsection{Mutex}
+
+Como o acesso às várias posições no vetor pode ser concorrente entre as threads, foi necessário a utilização de \textit{mutex}, que são variáveis de exclusão mútua, inclusas na biblioteca \textit{pthreads} e que fazem o controle de acesso através das funções de \textit{mutex\_lock()} e \textit{mutex\_unlock()} utilizando o método de \textit{busy-waiting}.
+
+As variáveis mutex utilizadas são declaradas globalmente e são as seguintes:
+\begin{algorithm}
+\begin{footnotesize}
+    \textbf{Mutex Global:} controla o acesso das variáveis Quantidade de homens solteiros e de Número de threads\;
+    \textbf{Mutex Mulheres:} Um vetor de mutex, onde cada mutex controla o acesso a cada lista de preferência da mulher\;
+    \textbf{Mutex Homens:} Um vetor de mutex, onde cada mutex controla o acesso a cada lista de preferências do homem\;
+	
+\caption{Mutex}%
+\end{footnotesize}
+\end{algorithm}
+
+\section{IMPLEMENTAÇÃO}
+\label{implementacao}
+
+O critério de separação dos arquivos do programa objetivou a modularização do mesmo, para possível utilização posterior, evitar duplicamento de funções, além de melhorar a legibilidade e organização do mesmo.
+
+\subsection{Código}
+
+\subsubsection{Arquivos .c}
+
+\begin{itemize}
+\item \textbf{main.c:} Arquivo principal do programa, contém a chamada de execução da função principal para solução do SMP paralelizado.
+
+\item \textbf{io.c:} Realiza a comunicação do programa com o ambiente, lendo o arquivo de entrada, armazenando as informações lidas na memória e escrevendo os resultados nos arquivos de saída.
+
+\item \textbf{heuristica.c:} Define o funcionamento da função principal do programa, incluindo a versão paralela e a versão sequencial.
+
+\item \textbf{lista.c:} Define funções que operam sobre o TAD lista encadeada.
+
+\item \textbf{timerlinux.c:} Contém funções para mensurar o tempo de execução do programa.
+
+\end{itemize}
+
+\subsubsection{Arquivos .h}
+
+Os arquivos de cabeçalho .h definem as estruturas e o cabeçalho das funções dos arquivos .c respectivos.
+
+% \begin{itemize}
+% 
+% \item \textbf{io.h:} Contém o cabeçalho das funções de entrada e saída.
+% 
+% \item \textbf{heuristica.h:} Define o cabeçalho da principal função de execução do programa e define o tipo de dado que a memória utilizará.
+% 
+% \item \textbf{texto.h:} Define o cabeçalho das funções do TAD Expressão Booleana e o tipo de dado do vetor BoolExp.
+% 
+% \item \textbf{palavra.h:} Define o cabeçalho das funções do TAD Expressão Booleana e o tipo de dado do vetor BoolExp.
+% 
+% \item \textbf{timerlinux.h:} Cabeçalho e instruções para cronometrar o tempo de execução do programa.
+% \end{itemize}
+
+\subsection{Compilação e execução}
+
+O programa deve ser compilado através do compilador GCC através de um \textit{makefile} com o comando \textit{make} ou através do seguinte comando em terminal:
+
+\begin{footnotesize}
+\begin{verbatim} gcc main.c lista.c heuristica.c io.c timerlinux.c -o tp6 \end{verbatim}
+\end{footnotesize}
+
+Para execução do programa, são requeridos três parâmetros, o nome do arquivo de entrada, o nome do arquivo de saída, esses dois argumentos podem estar em qualquer ordem. Por último a quantidade de threads a serem utilizadas pelo programa, que deve ser sempre o 5º argumento. Caso não haja ao menos esses 3 argumentos, ou a quantidade de threads seja menor que 1, o programa encerra a execução. A análise de execução do programa pode ser habilitada passando $-a$ para a execução do programa, habilitando a escrita das medidas de avaliação do programa num arquivo de texto. O tamanho máximo de nome de arquivo é 255 caracteres. 
+
+Um exemplo é dado a seguir.
+
+\begin{footnotesize}
+\begin{verbatim} ./tp6 -i input.txt -o output.txt <num_threads>\end{verbatim}
+\end{footnotesize}
+
+Alternativamente, pode-se executar o programa com as entradas padrões (input.txt, output.txt, 4 threads) utilizando o comando \textit{make run}.
+
+\subsection{Entrada e saída}
+
+\subsubsection{Formato da entrada}
+
+O arquivo de entrada cujo nome é passado como argumento para o executável, contém uma linha que define a quantidade de instâncias que este arquivo possui, ou seja, quantas entradas diferentes estão contidas nesse arquivo que deverão ser executadas por esse algoritmo.
+Na segunda linha, há o número $n$ de indivíduos em cada conjunto, que será, por consequência, a quantidade de elementos contidos naquela linha, já que a lista de preferência percorre todos os elementos do outro conjunto.
+
+Um exemplo de arquivo de entrada é dado a seguir:
+
+\begin{footnotesize}
+\begin{verbatim}
+1
+4
+2 4 1 3
+4 1 2 3
+2 3 4 1
+2 3 4 1
+2 3 4 1
+3 4 2 1
+3 2 1 4
+3 2 4 1
+\end{verbatim}
+\end{footnotesize}
+
+\subsubsection{Formato da saída}
+
+A saída do programa, armazenada em um arquivo de saída \textit{output.txt}, contém informações sobre os $n$ casais formados e a qualidade dos casamentos obtidos através do índice de satisfabilidade. Para cada casamento, é impresso as ids dos homens à esquerda e a id de suas respectivas esposas à direita.
+Após as ids dos conjunges é apresentado o índice de satisfabilidade geral, a satisfabilidade masculina e a satisfabilidade feminina com precisão de 3 casas decimais. Para o caso de várias instâncias, a sequência se repete abaixo da anterior. Um exemplo de saída é dado abaixo:
+
+\begin{footnotesize}
+\begin{verbatim}
+2 4
+1 1
+3 2
+4 3
+2.250
+1.750
+2.750
+\end{verbatim}
+\end{footnotesize}
+
+\section{ANÁLISE EXPERIMENTAL}
+\label{analise}
+
+\subsection{Resultados}
+Para realizar os testes utilizou-se um gerador de entradas escrito em Python que segue anexo à este documento. O gerador foi disponibilizado pelo aluno Rafael R. Cacique durante a realização do TP0. Os tamanhos de entrada foram valores discretos entre $[1000, 7000]$, com variação de 1000 entre cada. 7000 foi o maior valor possível dentro da máquina utilizada para realizar os testes.
+
+Os testes foram realizados em uma máquina com processador Intel Core i3 370M 2.40GHz, 4GiB RAM DDR3 1333MHz e sistema operacional Linux Ubuntu 12.04 x86 versão do kernel 3.2.0-26.
+
+Abaixo uma tabela com os resultados obtidos.
+
+\begin{table}[ht!]
+\begin{center}
+\begin{footnotesize}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{$n$} & \textbf{Tempo execução (segs.)}\\ \hline
+1000	&0.015722	\\ \hline
+2000	&0.068384	\\ \hline
+3000	&0.156200	\\ \hline
+4000	&0.281606	\\ \hline
+5000	&0.444235	\\ \hline
+6000	&0.543542	\\ \hline
+7000	&0.856672	\\ \hline
+\end{tabular}
+\end{footnotesize}
+\end{center}
+\caption{Resultados para o algoritmo sequencial}
+\end{table}
+
+
+\begin{table}[ht!]
+\begin{center}
+\begin{footnotesize}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{\# Threads} & \textbf{$n$} & \textbf{Tempo execução (segs.)}\\ \hline
+4	&1000	&0.109059	\\ \hline
+4	&2000	&0.310657	\\ \hline
+4	&3000	&0.537188	\\ \hline
+4	&4000	&0.942464	\\ \hline
+4	&5000	&1.175335	\\ \hline
+4	&6000	&1.456600	\\ \hline
+4	&7000	&2.500916	\\ \hline
+\end{tabular}
+\end{footnotesize}
+\end{center}
+\caption{Resultados com número de threads constante}
+\end{table}
+
+\begin{table}[ht!]
+\begin{center}
+\begin{footnotesize}
+\begin{tabular}{|c|c|c|c|c|c|c|c|}
+\hline
+\textbf{$n$} & \textbf{2 Threads} & \textbf{4 Threads}& \textbf{8 Threads}& \textbf{16 Threads}& \textbf{32 Threads}& \textbf{64 Threads}& \textbf{128 Threads}\\ \hline
+1000	&0.108846	&0.096137	&0.079455	&0.076632	&0.075020	&0.083145	&0.123748\\ \hline
+2000	&0.303263	&0.259955	&0.271714	&0.343019	&0.192309	&0.290873	&0.250100\\ \hline
+3000	&0.542149	&0.432848	&0.453632	&0.472345	&0.330278	&0.362372	&0.384757\\ \hline
+4000	&0.916267	&0.765605	&0.780868	&0.816397	&0.574092	&0.649970	&0.956197\\ \hline
+5000	&1.304987	&0.932636	&0.904193	&0.979239	&0.708826	&0.751331	&0.920149\\ \hline
+6000	&1.464204	&1.127131	&1.132215	&1.120735	&0.880291	&1.099349	&1.321818\\ \hline
+7000	&2.270563	&1.942701	&1.876865	&1.977839	&1.469190	&1.843783	&2.030872\\ \hline
+\end{tabular}
+\end{footnotesize}
+\end{center}
+\caption{Resultados com número de threads quadraticamente crescente}
+\end{table}
+
+\pagebreak
+
+Para o cálculo da eficiência foi-se utilizado os valores para uma entrada de tamanho $n = 7000$.
+
+\begin{table}[ht!]
+\begin{center}
+\begin{footnotesize}
+\begin{tabular}{|c|c|c|}
+\hline
+\textbf{\# Threads} & \textbf{Speedup} & \textbf{Eficiência}\\ \hline
+2	&0,3772949705	&0,1886474852 	\\ \hline
+4	&0,4409695573	&0,1102423893 	\\ \hline
+8	&0,4564377299	&0,0570547162	\\ \hline
+16	&0,4331353563 	&0,0270709598	\\ \hline
+32	&0,5830913633 	&0,0182216051	\\ \hline
+64	&0,464627345 	&0,0072598023	\\ \hline
+128	&0,4218247137 	&0,003295505 	\\ \hline
+\end{tabular}
+\end{footnotesize}
+\end{center}
+\caption{Eficiência e Speedup}
+\end{table}
+
+\begin{center}
+ $ \begin{array}{cc}
+ \includegraphics[scale=0.58]{sequencial.eps} & \includegraphics[scale=0.58]{paralelo.eps} %
+%\includegraphics[scale=0.58]{tempo.eps}
+\end{array}$
+ \end{center}
+
+A partir da análise experimental, nota-se que o tempo de execução é polinomialmente crescente, como esperado da complexidade do algoritmo $O(n³)$, mantendo-se constante os a quantidade de threads.
+
+De acordo com os valores calculados, o melhor valor de speedup é para 32 threads, mas mesmo assim é mais interessante utilizar o algoritmo sequencial para todos os casos testados.
+
+\section{CONCLUSÃO}
+\label{conclusao}
+
+Neste trabalho foi descrito um algoritmo para encontrar o casamento estável entre dois grupos utilizando programação paralela, utilizando o algoritmo de Gale-Shapley distribuindo o processamento entre várias threads.
+
+Conclui-se que a paralelização do algoritmo através da modelagem proposta não é eficiente, aumentando o tempo de execução, provavelmente pelo tempo ocioso e computação adicional inerentes à paralelização de algoritmos.
+
+Uma decisão a nível de implementação tomada foi a de somente passar a função de execução para a thread se houver processamento significante a ser realizado por ela. Ou seja, se um homem $i$ já estiver casado, não há nada o que ser feito dentro da função. Essa mudança modificou o requisito para a chamada da função Isso reduziu o tempo de ocioso das threads para sincronização do programa, promovendo o balanceamento da carga.
+
+Outra melhoria do algoritmo sequencial do TP0 implementada no TP6 foi a remoção das mulheres já testadas da lista de preferências do homem. Essa operação acontece em $O(1)$ e não requer nenhum \textit{lock} adicional, pois acontece logo que um homem é rejeitado, então o acesso a essa lista já é exclusivo para a thread corrente.
+
+O trabalho atingiu seus principais objetivos: aprofundar os estudos em algoritmos paralelos, analisando seu desempenho em termos de tempo de execução como o speedup e eficiência.
+
+Dentre as adversidades encontradas durante o desenvolvimento desse algoritmo, a maior foi a modelagem do problema em diversas threads, de forma conjunta produzissem um único resultado final, muito provavelmente causado por esse ser um primeiro algoritmo desenvolvido sob essa perspectiva. Outro ponto foi o entendimento da biblioteca pthreads e o tratamento de erros do programa paralelo.
+
+Algumas melhorias que poderiam ser consideradas neste trabalho são:
+\begin{itemize}
+\item Realizar testes de forma a solucionar os erros apresentados ocasionalmente durante a execução do programa. Os erros acontecem de forma aparentemente randômica, mas ao executar o programa novamente o erro não acontece mais.
+\item Utilizar uma modelagem paralela mais eficiente para esse problema.
+\item Avaliar o algoritmo mais intensamente de forma a descobrir a causa do tempo de execução semelhante para um número variado de threads. Como por exemplo em um computador com processador com mais threads.
+\end{itemize}
+\bibliographystyle{sbc}
+% \bibliography{tp6}
+
+\section{REFERÊNCIAS}
+\noindent[1] Cormen, T. (2001). Introduction to algorithms. MIT press.
+
+\noindent[2] Ziviani, N. (2007). Projeto de Algoritmos com implementacoes em Pascal e C. Pioneira Thomson Learning.
+
+\noindent[3] Blaise Barney, Lawrence Livermore National Laboratory - POSIX Threads Programming - https://computing.llnl.gov/tutorials/pthreads/
+
+\noindent[4] Jesper Larsen, University of Copenhagen - A Parallel Approach to the Stable Marriage Problem
+
+\noindent[5] Department of Information and Computing Sciences, Faculty of Science, Utrecht University. http://www.cs.uu.nl/docs/vakken/an/handouts/2011-03-03\_an-stablemarriage.pdf
+
+\end{document}
